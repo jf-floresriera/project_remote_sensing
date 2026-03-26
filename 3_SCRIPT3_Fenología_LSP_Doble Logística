@@ -1,0 +1,70 @@
+// ============================================================
+// SCRIPT 3: Fenología LSP (Doble Logística) - Meta 2023
+// Lanza el cálculo para LAI, FVC y laiCab simultáneamente
+// ============================================================
+
+// 1. Cargar las funciones originales de fenología desde TU repositorio
+// 👇 ASEGÚRATE DE QUE LA RUTA SEA CORRECTA 👇
+var phenoFuncs = require('users/jfloresr/project_1:PhenologyFunctions');
+var addDoy = phenoFuncs.addDoy;
+var get_Double_Logistic_Params = phenoFuncs.get_Double_Logistic_Params;
+
+// 2. Variables y parámetros del artículo original
+var vegIndices = ['LAI', 'FVC', 'laiCab'];
+var threshold = 0.3; // Umbral original del artículo de Salinero-Delgado (Half-maximum criterion)
+
+// 3. Área de estudio y máscara de cultivo
+var region = ee.Geometry.Rectangle([-72.062937, 4.206600, -71.492754, 4.5]);
+var parcelas = ee.FeatureCollection('projects/wide-origin-466923-d8/assets/maiz_industrial_meta_2023')
+                 .filterBounds(region);
+var parcelasMask = ee.Image.constant(0).clip(region).paint(parcelas, 1);
+
+// 4. Bucle para procesar las 3 variables
+vegIndices.forEach(function(currentVegIndex) {
+  
+  var ASSET_FOLDER_IN = 'projects/wide-origin-466923-d8/assets/GPR_' + currentVegIndex + '_meta_2023_gapfilled';
+  var ASSET_ID_OUT    = 'projects/wide-origin-466923-d8/assets/PHENO_LSP_' + currentVegIndex + '_meta_2023';
+
+  // Leer la carpeta de imágenes gapfilled
+  var colAssetsList;
+  try {
+    colAssetsList = ee.data.listAssets(ASSET_FOLDER_IN).assets;
+  } catch(e) {
+    print('⚠️ Error leyendo la carpeta: ' + ASSET_FOLDER_IN + '. Asegúrate de que las tareas terminaron.');
+    return; // Si no encuentra la carpeta, salta a la siguiente variable
+  }
+  
+  // Evitar sobreescribir si ya existe la tarea terminada
+  try {
+    ee.data.getAsset(ASSET_ID_OUT);
+    print('⏭️ Saltando (ya existe): ' + ASSET_ID_OUT);
+    return;
+  } catch (e) {
+    // Si no existe, procedemos a calcular
+  }
+
+  print('Imágenes gapfilled encontradas para ' + currentVegIndex + ':', colAssetsList.length);
+
+  // Crear la ImageCollection y añadir el Día del Año (DOY) como manda el artículo
+  var gapfilledCol = ee.ImageCollection(
+    colAssetsList.map(function(asset) {
+      return ee.Image(asset.id);
+    })
+  ).map(addDoy).map(function(img) { return img.updateMask(parcelasMask); }); // Enmascarar a los polígonos
+
+  // Aplicar el modelo Double Logistic
+  var LSPmetrics = get_Double_Logistic_Params(gapfilledCol, 'gapfilled', threshold);
+
+  // Crear la tarea de exportación
+  Export.image.toAsset({
+    image: LSPmetrics.select(['sos', 'eos', 'pos', 'los']).clip(region),
+    description:  'PHENO_LSP_' + currentVegIndex,
+    assetId: ASSET_ID_OUT,
+    scale: 20,
+    region: region,
+    crs: 'EPSG:4326',
+    maxPixels: 1e13
+  });
+});
+
+print('✅ Tareas de Fenología listas para las  2 vaariables , Dale a RUN ALL en Tasks!');
